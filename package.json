@@ -1,5 +1,5 @@
 {
-  "name": "rifascuiabà-viveiro-lu-rosa-do-deserto",
+  "name": "rifafácil",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,7 +10,10 @@
   },
   "dependencies": {
     "react-dom": "^19.2.0",
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "@google/genai": "^1.29.0",
+    "firebase": "^12.5.0",
+    "html-to-image": "1.11.11"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

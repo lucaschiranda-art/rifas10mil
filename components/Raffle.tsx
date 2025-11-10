@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Raffle, Ticket, TicketStatus } from '../types';
 import CountdownTimer from './CountdownTimer';
-import { GiftIcon, CalendarIcon, CheckCircleIcon, XCircleIcon, QrCodeIcon, ShareIcon, WhatsAppIcon, FacebookIcon, XSocialIcon, ClipboardIcon } from './icons';
+import { GiftIcon, CalendarIcon, CheckCircleIcon, XCircleIcon, ShareIcon, WhatsAppIcon, FacebookIcon, XSocialIcon, ClipboardIcon } from './icons';
+import { sendAdminNotification } from '../utils/notifications';
+import ReceiptModal from './ReceiptModal';
 
 // --- Helper Functions & Constants ---
 const RESERVATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -17,11 +19,6 @@ const getStatusClasses = (status: TicketStatus, isSelected: boolean) => {
 };
 
 // --- PIX QR Code Generator ---
-/**
- * Calculates CRC16/CCITT-FALSE checksum.
- * @param payload The string to calculate the checksum for.
- * @returns A 4-character hexadecimal string representing the checksum.
- */
 const crc16 = (payload: string): string => {
     let crc = 0xFFFF;
     const polynomial = 0x1021;
@@ -38,44 +35,28 @@ const crc16 = (payload: string): string => {
     return ('0000' + (crc & 0xFFFF).toString(16).toUpperCase()).slice(-4);
 };
 
-/**
- * Formats a value for the PIX payload with ID and length.
- * @param id The ID of the field.
- * @param value The value of the field.
- * @returns A formatted string "IDLLValue".
- */
 const formatValue = (id: string, value: string): string => {
     const len = String(value.length).padStart(2, '0');
     return `${id}${len}${value}`;
 };
 
-/**
- * Generates a valid PIX QR Code payload string (BR Code).
- * @param pixKey The PIX key (CPF, CNPJ, email, phone, or random).
- * @param amount The transaction amount.
- * @param merchantName The name of the merchant/receiver (up to 25 chars).
- * @param merchantCity The city of the merchant/receiver (up to 15 chars).
- * @param txid The transaction ID (defaults to '***' for static QR codes).
- * @returns A complete and valid BR Code string.
- */
 const generatePixPayload = (pixKey: string, amount: number, merchantName: string, merchantCity: string, txid: string = '***'): string => {
-    // Normalize and truncate names according to spec, removing special characters
     const sanitizedMerchantName = merchantName.substring(0, 25).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, '');
     const sanitizedMerchantCity = merchantCity.substring(0, 15).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, '');
 
     const payload = [
-        formatValue('00', '01'), // Payload Format Indicator
-        formatValue('26', // Merchant Account Information
+        formatValue('00', '01'),
+        formatValue('26', 
             formatValue('00', 'br.gov.bcb.pix') +
             formatValue('01', pixKey)
         ),
-        formatValue('52', '0000'), // Merchant Category Code
-        formatValue('53', '986'), // Transaction Currency (BRL)
-        formatValue('54', amount.toFixed(2)), // Transaction Amount
-        formatValue('58', 'BR'), // Country Code
-        formatValue('59', sanitizedMerchantName), // Merchant Name
-        formatValue('60', sanitizedMerchantCity), // Merchant City
-        formatValue('62', // Additional Data Field
+        formatValue('52', '0000'),
+        formatValue('53', '986'),
+        formatValue('54', amount.toFixed(2)),
+        formatValue('58', 'BR'),
+        formatValue('59', sanitizedMerchantName),
+        formatValue('60', sanitizedMerchantCity),
+        formatValue('62', 
             formatValue('05', txid)
         )
     ].join('');
@@ -161,17 +142,19 @@ interface PaymentModalProps {
     raffle: Raffle;
     selectedNumbers: number[];
     onClose: () => void;
-    onConfirmReservation: () => void;
+    onConfirmReservation: (name: string, contact: string) => void;
 }
 
 const PaymentModal: React.FC<PaymentModalProps> = ({ raffle, selectedNumbers, onClose, onConfirmReservation }) => {
     const total = raffle.ticketPrice * selectedNumbers.length;
+    const [name, setName] = useState('');
+    const [contact, setContact] = useState('');
     
     const pixPayload = useMemo(() => generatePixPayload(
         raffle.pixKey,
         total,
-        raffle.name, // Merchant Name (will be sanitized)
-        'CUIABA'     // Merchant City
+        raffle.name, 
+        'BRASIL'     
     ), [raffle.pixKey, total, raffle.name]);
 
     const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(pixPayload)}`;
@@ -191,13 +174,27 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ raffle, selectedNumbers, on
         setTimeout(() => setPixPayloadCopied(false), 2000);
     };
 
+    const handleReservation = () => {
+        if (!name.trim() || !contact.trim()) {
+            alert('Por favor, preencha seu nome e contato para continuar.');
+            return;
+        }
+        onConfirmReservation(name, contact);
+    };
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 p-4">
-            <div className="bg-white p-6 rounded-lg shadow-2xl w-full max-w-md relative text-center">
+            <div className="bg-white p-6 rounded-lg shadow-2xl w-full max-w-md relative text-center max-h-screen overflow-y-auto">
                 <button onClick={onClose} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800">
                     <XCircleIcon className="w-8 h-8" />
                 </button>
                 <h2 className="text-2xl font-bold mb-4 text-primary">Pagamento via PIX</h2>
+
+                <div className="space-y-3 mb-4 text-left">
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Seu Nome Completo" className="w-full p-2 border rounded" required />
+                    <input type="text" value={contact} onChange={(e) => setContact(e.target.value)} placeholder="Seu Contato (WhatsApp)" className="w-full p-2 border rounded" required />
+                </div>
+
                 <p className="mb-2">Você selecionou <strong>{selectedNumbers.length}</strong> número(s):</p>
                 <div className="flex flex-wrap justify-center gap-2 mb-4 max-h-20 overflow-y-auto">
                     {selectedNumbers.map(n => <span key={n} className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm font-semibold">{String(n).padStart(3, '0')}</span>)}
@@ -231,7 +228,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ raffle, selectedNumbers, on
                     </div>
                 </div>
 
-                <button onClick={onConfirmReservation} className="w-full bg-success text-white mt-4 p-3 rounded-lg font-bold hover:bg-green-700 transition-colors">
+                <button onClick={handleReservation} className="w-full bg-success text-white mt-4 p-3 rounded-lg font-bold hover:bg-green-700 transition-colors">
                     Já fiz o pagamento! (Reservar)
                 </button>
                 <p className="text-xs text-gray-500 mt-2">Seu número ficará reservado por 10 minutos para confirmação do pagamento.</p>
@@ -252,6 +249,8 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [isPaymentModalOpen, setPaymentModalOpen] = useState(false);
     const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
+    const [isReceiptModalOpen, setReceiptModalOpen] = useState(false);
+    const [receiptData, setReceiptData] = useState<{ name: string; contact: string; selectedNumbers: number[]; total: number; } | null>(null);
 
     const handleShare = async () => {
         const url = new URL(window.location.href);
@@ -273,12 +272,10 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
                 console.error('Erro ao compartilhar:', error);
             }
         } else {
-            // Fallback for desktop
             setIsShareMenuOpen(prev => !prev);
         }
     };
 
-    // Effect to clean up expired reservations
     useEffect(() => {
         const interval = setInterval(() => {
             let needsUpdate = false;
@@ -286,7 +283,7 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
             const updatedTickets = raffle.tickets.map(ticket => {
                 if (ticket.status === TicketStatus.RESERVED && ticket.reservedAt && (now - ticket.reservedAt > RESERVATION_TIMEOUT_MS)) {
                     needsUpdate = true;
-                    return { ...ticket, status: TicketStatus.AVAILABLE, reservedAt: undefined };
+                    return { ...ticket, status: TicketStatus.AVAILABLE, reservedAt: undefined, ownerName: undefined, ownerContact: undefined };
                 }
                 return ticket;
             });
@@ -294,10 +291,9 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
             if (needsUpdate) {
                 onUpdateRaffle({ ...raffle, tickets: updatedTickets });
             }
-        }, 60000); // Check every minute
+        }, 60000);
 
         return () => clearInterval(interval);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [raffle, onUpdateRaffle]);
 
 
@@ -312,16 +308,28 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
         );
     };
 
-    const handleConfirmReservation = () => {
+    const handleConfirmReservation = (name: string, contact: string) => {
         const now = Date.now();
         const updatedTickets = raffle.tickets.map(ticket =>
             selectedNumbers.includes(ticket.number)
-                ? { ...ticket, status: TicketStatus.RESERVED, reservedAt: now }
+                ? { ...ticket, status: TicketStatus.RESERVED, reservedAt: now, ownerName: name, ownerContact: contact }
                 : ticket
         );
         onUpdateRaffle({ ...raffle, tickets: updatedTickets });
-        setSelectedNumbers([]);
+
+        const notificationMessage = `"${name}" reservou ${selectedNumbers.length} número(s) na rifa "${raffle.name}".\nContato: ${contact}`;
+        sendAdminNotification(notificationMessage);
+
+        const receiptInfo = {
+            name,
+            contact,
+            selectedNumbers,
+            total: selectedNumbers.length * raffle.ticketPrice,
+        };
+        setReceiptData(receiptInfo);
         setPaymentModalOpen(false);
+        setReceiptModalOpen(true);
+        setSelectedNumbers([]);
     }
     
     const stats = useMemo(() => {
@@ -334,7 +342,7 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
     return (
         <div className="container mx-auto p-4 max-w-6xl">
             {isDeepLinkView && (
-                <div className="mb-4 text-center">
+                <div className="mb-4">
                     <button onClick={onNavigateHome} className="text-primary font-semibold hover:underline">
                         &larr; Ver todas as rifas
                     </button>
@@ -387,10 +395,10 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
                     )}
                     
                     <div className="my-6">
-                        <div className="flex justify-center items-center gap-4 mb-2 text-sm text-gray-600">
+                        <div className="flex justify-center items-center gap-4 mb-2 text-sm text-gray-600 flex-wrap">
                            <span className="flex items-center gap-1"><span className="w-4 h-4 rounded-full bg-green-500"></span> Disponível</span>
                            <span className="flex items-center gap-1"><span className="w-4 h-4 rounded-full bg-yellow-400"></span> Reservado</span>
-                           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded-full bg-gray-300"></span> Comprado</span>
+                           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded-full bg-gray-300"></span> Pago</span>
                            <span className="flex items-center gap-1"><span className="w-4 h-4 rounded-full bg-blue-500"></span> Selecionado</span>
                         </div>
                          <div className="grid grid-cols-5 sm:grid-cols-10 md:grid-cols-15 lg:grid-cols-20 gap-2 p-4 bg-gray-100 rounded-lg max-h-96 overflow-y-auto">
@@ -399,6 +407,7 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
                                     key={ticket.number}
                                     onClick={() => handleToggleNumber(ticket.number)}
                                     disabled={ticket.status !== TicketStatus.AVAILABLE}
+                                    title={ticket.ownerName ? `Comprador: ${ticket.ownerName}` : 'Disponível'}
                                     className={`w-full aspect-square text-sm font-bold rounded-md shadow-sm transition-all duration-200 border-b-4 ${getStatusClasses(ticket.status, selectedNumbers.includes(ticket.number))}`}
                                 >
                                     {String(ticket.number).padStart(String(raffle.totalTickets).length, '0')}
@@ -416,7 +425,7 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
                     </div>
                     <button onClick={() => setPaymentModalOpen(true)} className="bg-success text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:bg-green-700 transition-colors flex items-center gap-2">
                         <CheckCircleIcon className="w-6 h-6" />
-                        Comprar Agora
+                        Comprar
                     </button>
                 </div>
             )}
@@ -426,6 +435,16 @@ export const RafflePage: React.FC<RafflePageProps> = ({ raffle, onUpdateRaffle, 
                     selectedNumbers={selectedNumbers} 
                     onClose={() => setPaymentModalOpen(false)} 
                     onConfirmReservation={handleConfirmReservation}
+                />
+            )}
+            {isReceiptModalOpen && receiptData && (
+                <ReceiptModal
+                    raffle={raffle}
+                    receiptData={receiptData}
+                    onClose={() => {
+                        setReceiptModalOpen(false);
+                        setReceiptData(null);
+                    }}
                 />
             )}
         </div>
@@ -486,7 +505,10 @@ interface RaffleListProps {
 export const RaffleList: React.FC<RaffleListProps> = ({ raffles, onSelectRaffle }) => {
   return (
     <div className="p-4 md:p-8">
-      <h1 className="text-3xl font-bold text-center text-primary mb-8">Rifas Disponíveis</h1>
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-primary">Rifas Disponíveis</h1>
+        <p className="text-gray-600 mt-2">Escolha sua sorte e participe!</p>
+      </div>
       {raffles.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {raffles.map(raffle => (
